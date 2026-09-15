@@ -159,10 +159,46 @@ ReadResult read_record_at(std::istream& input, std::uint64_t offset) {
 }
 
 PrimaryBuildResult build_primary_index(std::istream& input) {
-  // TODO 2
-  // Recorra el archivo con next_offset, ordene por label_id y detecte duplicados.
-  (void)input;
-  return {BuildStatus::ReadError, {}, 0, {}, "TODO: implementar build_primary_index"};
+  PrimaryBuildResult r;
+
+  std::uint64_t offset = 0;
+  std::optional<std::uint64_t> size = stream_size(input);
+
+  if (!size.has_value()) {
+    r.status = BuildStatus::ReadError;
+    r.detail = "No se pudo obtener el tamaño archivo.";
+    return r;
+  }
+
+  while (offset < size.value()) {
+    ReadResult read = read_record_at(input, offset);
+
+    if (!read.ok()) {
+      r.status = BuildStatus::ReadError;
+      r.error_offset = offset;
+      r.detail = read.detail;
+      return r;
+    }
+
+    r.entries.push_back({read.record->label_id, read.offset});
+
+    offset = read.next_offset;
+  }
+
+  std::sort(r.entries.begin(), r.entries.end(),
+            [](const PrimaryEntry& a, const PrimaryEntry& b) { return a.label_id < b.label_id; });
+
+  for (int i = 1; i < r.entries.size(); i++) {
+    if (r.entries[i].label_id == r.entries[i - 1].label_id) {
+      r.status = BuildStatus::DuplicateKey;
+      r.error_key = r.entries[i].label_id;
+      r.detail = "Llave duplicada";
+      return r;
+    }
+  }
+
+  r.status = BuildStatus::Ok;
+  return r;
 }
 
 std::optional<std::uint64_t> find_offset(
