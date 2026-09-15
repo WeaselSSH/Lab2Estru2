@@ -188,7 +188,7 @@ PrimaryBuildResult build_primary_index(std::istream& input) {
   std::sort(r.entries.begin(), r.entries.end(),
             [](const PrimaryEntry& a, const PrimaryEntry& b) { return a.label_id < b.label_id; });
 
-  for (int i = 1; i < r.entries.size(); i++) {
+  for (std::size_t i = 1; i < r.entries.size(); i++) {
     if (r.entries[i].label_id == r.entries[i - 1].label_id) {
       r.status = BuildStatus::DuplicateKey;
       r.error_key = r.entries[i].label_id;
@@ -201,14 +201,22 @@ PrimaryBuildResult build_primary_index(std::istream& input) {
   return r;
 }
 
-std::optional<std::uint64_t> find_offset(
-    std::span<const PrimaryEntry> index,
-    std::string_view label_id) {
-  // TODO 3
-  // Implemente búsqueda binaria manual. No use std::lower_bound,
-  // std::binary_search ni std::equal_range.
-  (void)index;
-  (void)label_id;
+std::optional<std::uint64_t> find_offset(std::span<const PrimaryEntry> index, std::string_view label_id) {
+  int lo = 0;
+  int hi = index.size();
+
+  while (lo < hi) {
+    int cur = (lo + hi) / 2;
+
+    if (label_id == index[cur].label_id) {
+      return index[cur].offset;
+    } else if (label_id > index[cur].label_id) {
+      lo = cur + 1;
+    } else {
+      hi = cur;
+    }
+  }
+
   return std::nullopt;
 }
 
