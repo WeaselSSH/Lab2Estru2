@@ -139,6 +139,12 @@ ReadResult read_record_at(std::istream& input, std::uint64_t offset) {
 
   PayloadDecodeResult p = decode_payload(payload);
 
+  if (!p.record.has_value()) {
+    result.status = ReadStatus::MalformedPayload;
+    result.detail = p.detail;
+    return result;
+  }
+
   result.record = p.record;
   result.detail = p.detail;
   result.next_offset = offset + RECORD_HEADER_SIZE + payload_length + RECORD_CHECKSUM_SIZE;
@@ -148,20 +154,58 @@ ReadResult read_record_at(std::istream& input, std::uint64_t offset) {
 }
 
 PrimaryBuildResult build_primary_index(std::istream& input) {
-  // TODO 2
-  // Recorra el archivo con next_offset, ordene por label_id y detecte duplicados.
-  (void)input;
-  return {BuildStatus::ReadError, {}, 0, {}, "TODO: implementar build_primary_index"};
+  PrimaryBuildResult primary_result;
+  std::uint64_t offset = 0;
+  std::optional<std::uint64_t> size = stream_size(input);
+
+  while (offset < size.value()) {
+    ReadResult result = read_record_at(input, offset);
+
+    if (!result.ok()) {
+      primary_result.status = BuildStatus::ReadError;
+      primary_result.detail = result.detail;
+      primary_result.error_offset = offset;
+
+      return primary_result;
+    }
+
+    primary_result.entries.push_back({result.record->label_id, offset});
+
+    offset = result.next_offset;
+  }
+
+  std::sort(primary_result.entries.begin(), primary_result.entries.end(),
+            [](const PrimaryEntry& a, const PrimaryEntry& b) { return a.label_id < b.label_id; });
+
+  for (std::size_t i = 1; i < primary_result.entries.size(); i++) {
+    if (primary_result.entries[i].label_id == primary_result.entries[i - 1].label_id) {
+      primary_result.status = BuildStatus::DuplicateKey;
+      primary_result.error_key = primary_result.entries[i].label_id;
+      primary_result.detail = "llave duplicada.";
+
+      return primary_result;
+    }
+  }
+
+  primary_result.status = BuildStatus::Ok;
+  return primary_result;
 }
 
-std::optional<std::uint64_t> find_offset(
-    std::span<const PrimaryEntry> index,
-    std::string_view label_id) {
-  // TODO 3
-  // Implemente búsqueda binaria manual. No use std::lower_bound,
-  // std::binary_search ni std::equal_range.
-  (void)index;
-  (void)label_id;
+std::optional<std::uint64_t> find_offset(std::span<const PrimaryEntry> index, std::string_view label_id) {
+  int hi = index.size();
+  int lo = 0;
+
+  while (lo < hi) {
+    int cur = (hi + lo) / 2;
+    if (index[cur].label_id == label_id) {
+      return index[cur].offset;
+    } else if (index[cur].label_id < label_id) {
+      lo = cur + 1;
+    } else {
+      hi = cur;
+    }
+  }
+
   return std::nullopt;
 }
 
@@ -186,33 +230,155 @@ ReadResult find_record(
 ComposerBuildResult build_composer_index(
     std::istream& input,
     std::span<const PrimaryEntry> primary) {
-  // TODO 4
-  // Recomendación: reúna pares (composer, label_id), ordénelos y agrúpelos.
-  // No almacene offsets en este índice secundario.
-  (void)input;
-  (void)primary;
+  ComposerBuildResult result;
+
+  std::vector<std::pair<std::string, std::string>> pairs;
+
+  for (const PrimaryEntry& entry : primary) {
+    ReadResult read = read_record_at(input, entry.offset);
+
+    if (!read.ok()) {
+      SkippedRecord s;
+      s.index_key = entry.label_id;
+      s.offset = entry.offset;
+      s.status = read.status;
+
+      result.skipped.push_back(s);
+      continue;
+    }
+
+    if (entry.label_id != read.record->label_id) {
+      SkippedRecord s;
+      s.index_key = entry.label_id;
+      s.offset = entry.offset;
+      s.status = ReadStatus::IndexKeyMismatch;
+
+      result.skipped.push_back(s);
+      continue;
+    }
+
+    pairs.push_back({read.record->composer,
+                     read.record->label_id});
+  }
+
+  std::sort(pairs.begin(), pairs.end());
+
+  for (const std::pair<std::string, std::string>& p : pairs) {
+    if (result.entries.empty() ||
+        result.entries.back().composer != p.first) {
+      result.entries.push_back({p.first, {p.second}});
+    } else if (result.entries.back().label_ids.back() != p.second) {
+      result.entries.back().label_ids.push_back(p.second);
+    }
+  }
+
+  return result;
+}
+
+std::span<const std::string> find_by_composer(const ComposerIndex& index, std::string_view composer) {
+  int hi = index.size();
+  int lo = 0;
+
+  while (lo < hi) {
+    int cur = (hi + lo) / 2;
+    if (index[cur].composer == composer) {
+      return index[cur].label_ids;
+    } else if (index[cur].composer < composer) {
+      lo = cur + 1;
+    } else {
+      hi = cur;
+    }
+  }
+
   return {};
 }
 
-std::span<const std::string> find_by_composer(
-    const ComposerIndex& index,
-    std::string_view composer) {
-  // TODO 5
-  // El ComposerIndex está ordenado por compositor: use búsqueda binaria.
-  (void)index;
-  (void)composer;
-  return {};
-}
+VerificationReport verify_primary_index(std::istream& input, std::span<const PrimaryEntry> index) {
+  VerificationReport v;
 
-VerificationReport verify_primary_index(
-    std::istream& input,
-    std::span<const PrimaryEntry> index) {
-  // TODO 6
-  // Haga primero las verificaciones estructurales del índice y luego valide
-  // cada referencia con read_record_at. No imprima desde esta función.
-  (void)input;
-  (void)index;
-  return {};
+  v.entries_checked = index.size();
+
+  for (std::size_t i = 0; i + 1 < index.size(); i++) {
+    if (index[i].label_id > index[i + 1].label_id) {
+      VerificationIssue issue;
+
+      issue.type = VerificationIssueType::UnsortedIndex;
+      issue.detail = "index no está ordenado.";
+      issue.index_key = index[i + 1].label_id;
+      issue.offset = index[i + 1].offset;
+
+      v.issues.push_back(issue);
+    }
+  }
+
+  std::vector<PrimaryEntry> sorted_index(index.begin(), index.end());
+  std::sort(sorted_index.begin(), sorted_index.end(),
+            [](const PrimaryEntry& a, const PrimaryEntry& b) { return a.label_id < b.label_id; });
+
+  for (std::size_t i = 0; i + 1 < sorted_index.size(); i++) {
+    if (sorted_index[i].label_id == sorted_index[i + 1].label_id) {
+      VerificationIssue issue;
+
+      issue.type = VerificationIssueType::DuplicateKey;
+      issue.detail = "llave duplicada.";
+      issue.index_key = sorted_index[i + 1].label_id;
+      issue.offset = sorted_index[i + 1].offset;
+
+      v.issues.push_back(issue);
+    }
+  }
+
+  std::sort(sorted_index.begin(), sorted_index.end(),
+            [](const PrimaryEntry& a, const PrimaryEntry& b) { return a.offset < b.offset; });
+
+  for (std::size_t i = 0; i + 1 < sorted_index.size(); i++) {
+    if (sorted_index[i].offset == sorted_index[i + 1].offset) {
+      VerificationIssue issue;
+
+      issue.type = VerificationIssueType::DuplicateOffset;
+      issue.detail = "offset duplicado.";
+      issue.index_key = sorted_index[i + 1].label_id;
+      issue.offset = sorted_index[i + 1].offset;
+
+      v.issues.push_back(issue);
+    }
+  }
+
+  for (const PrimaryEntry& p : index) {
+    ReadResult r = read_record_at(input, p.offset);
+
+    if (!r.ok()) {
+      VerificationIssue issue;
+
+      issue.type = VerificationIssueType::RecordReadError;
+      issue.index_key = p.label_id;
+      issue.offset = p.offset;
+      issue.read_status = r.status;
+      issue.detail = r.detail;
+
+      v.issues.push_back(issue);
+
+      continue;
+    }
+
+    if (r.record->label_id != p.label_id) {
+      VerificationIssue issue;
+
+      issue.type = VerificationIssueType::KeyMismatch;
+      issue.index_key = p.label_id;
+      issue.offset = p.offset;
+      issue.read_status = ReadStatus::Ok;
+      issue.detail = "La llave del índice no coincide con la del registro.";
+
+      v.issues.push_back(issue);
+
+      continue;
+    }
+
+    v.readable_matching_entries++;
+  }
+
+  return v;
 }
 
 std::vector<std::string> intersect_sorted(

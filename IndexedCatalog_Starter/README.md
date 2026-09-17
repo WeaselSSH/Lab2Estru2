@@ -97,3 +97,73 @@ Actualice este README con:
 - Descripción de las pruebas adicionales realizadas en `tests/student_tests.cpp`.
 
 No entregue `build/`, ejecutables ni archivos generados `.bin`, `.idx` o `.corrupt`.
+
+## Complejidad de las operaciones principales
+
+### Construcción del índice primario
+
+`build_primary_index` recorre los registros del archivo y construye una entrada por cada registro válido. Después ordena el índice por `label_id`.
+
+- Recorrido: `O(n)`
+- Ordenamiento: `O(n log n)`
+- Detección de duplicados: `O(n)`
+
+Complejidad total: `O(n log n)`.
+
+### Búsqueda primaria
+
+`find_offset` utiliza búsqueda binaria manual sobre el índice primario ordenado.
+
+Complejidad: `O(log n)`.
+
+La recuperación completa de un registro requiere además un acceso mediante `seek` y la lectura del registro en el archivo.
+
+### Construcción del índice secundario
+
+`build_composer_index` recorre las entradas primarias, obtiene pares `(composer, label_id)`, los ordena y luego los agrupa por compositor.
+
+Complejidad total: `O(n log n)`.
+
+### Búsqueda secundaria
+
+`find_by_composer` utiliza búsqueda binaria sobre el índice secundario ordenado por compositor.
+
+Si existen `c` compositores diferentes, la complejidad es:
+
+`O(log c)`.
+
+
+## Integridad física y consistencia lógica
+
+### Integridad física
+
+La integridad física se refiere a si los datos almacenados pueden leerse correctamente y si sus bytes coinciden con los datos esperados.
+
+Ejemplos:
+
+- header truncado;
+- payload truncado;
+- CRC faltante;
+
+### Consistencia lógica
+
+La consistencia lógica se refiere a si las estructuras y referencias del sistema tienen sentido entre sí.
+
+Ejemplos:
+
+- una clave del índice no coincide con la clave del registro;
+- claves primarias duplicadas;
+- índice desordenado;
+
+Un registro puede tener un CRC válido y aun así presentar una inconsistencia lógica.
+
+
+## Pruebas adicionales
+
+Se agregaron tres pruebas en `tests/student_tests.cpp`:
+
+1. Se verifica que `read_record_at` retorne `InvalidOffset` y que `record` no tenga valor cuando se intenta leer desde el offset `0` de un archivo vacío.
+
+2. Se verifica que `find_offset` retorne `std::nullopt` cuando la clave buscada no existe en el índice primario.
+
+3. Se verifica que `build_composer_index` descarte una entrada cuando la clave almacenada en el índice no coincide con la clave real del registro, retornando `IndexKeyMismatch` en `skipped`.
