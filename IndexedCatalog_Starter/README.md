@@ -1,3 +1,7 @@
+# Datos del estudiante
+Nombre: Edwin Gabriel Portillo García
+Número de cuenta: 22511038
+
 # Starter — Laboratorio 2: catálogo indexado y confiable
 
 Este proyecto contiene la infraestructura y las pruebas visibles del Laboratorio 2 de Estructura de Datos II.
